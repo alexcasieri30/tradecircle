@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./backend
+      target: production
+    container_name: tradecircle-backend-prod
+    ports:
+      - "5001:5001"
+    environment:
+      - FLASK_ENV=production
+      - PORT=5001
+    networks:
+      - tradecircle-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: production-serve
+    container_name: tradecircle-frontend-prod
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    environment:
+      - REACT_APP_API_URL=http://localhost:5001/api
+    networks:
+      - tradecircle-network
+    restart: unless-stopped
+
+networks:
+  tradecircle-network:
+    driver: bridge
+
+volumes:
+  backend_data:

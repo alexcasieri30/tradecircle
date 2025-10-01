@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./backend
+      target: development
+    container_name: tradecircle-backend-dev
+    ports:
+      - "5001:5001"
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - PORT=5001
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    networks:
+      - tradecircle-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    container_name: tradecircle-frontend-dev
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - REACT_APP_API_URL=http://localhost:5001/api
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - tradecircle-network
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+  postgres:
+    image: postgres:13
+    container_name: tradecircle-postgres
+    environment:
+      - POSTGRES_USER=tradecircle
+      - POSTGRES_PASSWORD=tradecirclepassword
+      - POSTGRES_DB=tradecircledb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - tradecircle-network
+    restart: unless-stopped
+
+networks:
+  tradecircle-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

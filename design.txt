@@ -1,0 +1,170 @@
+
+functional requirements:
+- log in
+    - authorization + authentication for a user
+
+- view groups
+
+- click on group
+    - view friends in the group
+    - view recent activity in the group ( feed ) 
+    - add trade to the group
+        - this will appear under a user's trades
+        - will appear in the feed
+
+- click on friend in the group
+    - 2 tabs
+        - all recent trades
+        - total portfolio
+            - this will show how much the stock has risen or fallen since the time of purchase
+                - need api calls to a finance api to get data for that stock at the specific datetime
+
+- Add trade
+    - name of asset
+        - stock, mutual fund, cryptocurrency
+    - enter trade type
+        - option, stock
+    - date
+    - price of asset
+    - amount of money you put in -- options:
+        - don't disclose
+        - disclose a range
+        - disclose exact amount of shares 
+
+non-functional requirements
+- consistency is very important over availability, with stocks we want to have the most recent data in the system displayed to the user
+
+- latency vs. throughput
+
+- trades table will be read heavy, most people aren't executing trades each day
+    - we can have a read-replica of the entire database for readonly actions
+    - also we aren't adding that many users, or groups compared to read operations for these objects
+
+- authentication -> JWT session
+
+- authorization -> users will have their own role within a group
+    - admin (full permissions)
+    - user (readonly, add / delete your own trades)
+
+
+API Design
+
+-- group details
+# GET get feed (recent transactions) for a specific group
+# GET get group name / users associated with a group
+
+-- user details
+# GET user details (name, avatar)
+# GET most recent trades for user
+    - organize the data into 1. recent txns, 2. portfolio
+
+-- trade details
+# GET trade details - (all info input into form when entering the trade)
+# for portfolio view -> get current stock information to see % change from purchase to now
+    - will require separate api call to finance api 
+
+
+-- groups
+POST create group
+{
+    group name,
+    users in group
+} -> group id
+PATCH update group name / add user to group 
+{
+    group_name,
+    user_list
+} -> group id
+DELETE delete group
+{
+    group_id
+}
+
+-- users
+POST create user
+{
+    user_id, 
+    firstname, 
+    lastname,
+    avatar? 
+}
+
+DELETE delete user
+{
+    user_id
+}
+
+PATCH edit user details
+{
+    user_id, 
+    firstname, 
+    lastname,
+    avatar? 
+}
+
+
+-- trades
+POST add trade
+{
+    user name,
+    asset name,
+    type of trade (shares, option),
+    action (buy, sell),
+    datetime,
+    amount type (no disclosure, range, exact amount),
+    quantity (optional) (roughly amount of money input),
+}
+-> transaction id
+
+DELETE delete trade
+{
+    transaction id
+}
+--------------------
+
+DATABASE TABLES
+
+users
+| user_id | firstname | lastname | email | created_at | updated_at |
+  uuid      varchar     varchar    varchar  timestamp   timestamp
+
+groups
+| group_id | group_name | created_by | created_at | updated_at |
+  uuid       varchar      user_id     timestamp   timestamp
+
+user_groups (junction table for many-to-many relationship)
+| user_id | group_id | role | joined_at | status |
+  uuid      uuid       enum   timestamp   enum
+  
+  -- role: 'admin', 'member', 'viewer'
+  -- status: 'active', 'inactive', 'pending'
+
+trades
+| trade_id | user_id | group_id | asset_name | type_of_trade | action | quantity_type | amount | price | datetime | created_at |
+  uuid       uuid      uuid       varchar      enum           enum     enum           decimal  decimal timestamp timestamp
+  
+  -- type_of_trade: 'stock', 'option', 'crypto', 'etf'
+  -- action: 'buy', 'sell'
+  -- quantity_type: 'undisclosed', 'range', 'exact'
+
+INDEXES (for performance)
+- user_groups(user_id) 
+- user_groups(group_id)
+- trades(group_id, datetime) -- for group feeds
+- trades(user_id, datetime)  -- for user portfolio
+- trades(asset_name)         -- for asset lookups
+
+FOREIGN KEY CONSTRAINTS
+- user_groups.user_id → users.user_id (CASCADE DELETE)
+- user_groups.group_id → groups.group_id (CASCADE DELETE)  
+- trades.user_id → users.user_id (CASCADE DELETE)
+- trades.group_id → groups.group_id (CASCADE DELETE)
+- groups.created_by → users.user_id (SET NULL)
+
+
+----------
+Architecture
+
+frontend container for UI
+backend container for API
+backend container for Database
