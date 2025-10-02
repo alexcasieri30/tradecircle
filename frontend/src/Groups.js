@@ -255,7 +255,7 @@ const Groups = ({ onGroupSelect, currentUser }) => {
                 
                 <div className="group-action">
                   {group.is_member ? (
-                    <span className="click-hint">Click to view trades →</span>
+                    <span className="click-hint">Click card to view trades →</span>
                   ) : group.has_pending_request ? (
                     <span className="request-status pending">Join request pending</span>
                   ) : (
@@ -317,7 +317,7 @@ const Groups = ({ onGroupSelect, currentUser }) => {
                 </div>
                 
                 <div className="group-action">
-                  <span className="click-hint">Click to view trades →</span>
+                  <span className="click-hint">Click card to view trades →</span>
                 </div>
               </div>
             ))

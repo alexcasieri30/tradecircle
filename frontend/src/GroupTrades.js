@@ -1,6 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import io from 'socket.io-client';
 import './GroupTrades.css';
+
+// Helper functions for quantity ranges
+const parseQuantityRange = (quantityStr) => {
+  if (quantityStr.includes('-')) {
+    const [min, max] = quantityStr.split('-').map(num => parseInt(num));
+    return { min, max };
+  } else {
+    // Fallback for single numbers
+    const qty = parseInt(quantityStr);
+    return { min: qty, max: qty };
+  }
+};
+
+const calculateTotalRange = (quantityStr, price) => {
+  const { min, max } = parseQuantityRange(quantityStr);
+  const minTotal = min * price;
+  const maxTotal = max * price;
+  return { minTotal, maxTotal };
+};
 
 const GroupTrades = ({ group, onBack, currentUser }) => {
   const [trades, setTrades] = useState([]);
@@ -13,14 +33,74 @@ const GroupTrades = ({ group, onBack, currentUser }) => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [newTrade, setNewTrade] = useState({
     symbol: '',
-    quantity: '',
+    quantity: '1-10',
     price: '',
     type: 'buy'
   });
 
+  // Chat-related state
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [isConnected, setIsConnected] = useState(false);
+  const socketRef = useRef(null);
+
   useEffect(() => {
     fetchGroupTrades();
+    initializeWebSocket();
+    
+    // Cleanup on unmount
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.emit('leave_group_chat', {
+          user: currentUser,
+          group_id: group.id
+        });
+        socketRef.current.disconnect();
+      }
+    };
   }, [group.id]);
+
+  const initializeWebSocket = () => {
+    // Connect to WebSocket server
+    socketRef.current = io('http://localhost:5001', {
+      transports: ['websocket', 'polling']
+    });
+
+    socketRef.current.on('connect', () => {
+      console.log('Connected to WebSocket server');
+      setIsConnected(true);
+      
+      // Auto-join the group chat when connected
+      socketRef.current.emit('join_group_chat', {
+        user: currentUser,
+        group_id: group.id
+      });
+    });
+
+    socketRef.current.on('disconnect', () => {
+      console.log('Disconnected from WebSocket server');
+      setIsConnected(false);
+    });
+
+    socketRef.current.on('new_message', (data) => {
+      const { group_id, message } = data;
+      if (group_id === group.id) {
+        setChatMessages(prev => [...prev, message]);
+      }
+    });
+
+    socketRef.current.on('joined_group_chat', (data) => {
+      console.log(`Joined chat for group: ${data.group_name}`);
+      // Load initial chat messages
+      fetchChatMessages();
+    });
+
+    socketRef.current.on('error', (error) => {
+      console.error('WebSocket error:', error);
+      setError(error.message);
+    });
+  };
 
   const fetchGroupTrades = async () => {
     try {
@@ -37,6 +117,51 @@ const GroupTrades = ({ group, onBack, currentUser }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchChatMessages = async () => {
+    try {
+      const response = await axios.get(`/groups/${group.id}/chat?user=${currentUser}`);
+      setChatMessages(response.data.messages || []);
+    } catch (err) {
+      console.error('Error fetching chat messages:', err);
+      setChatMessages([]);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!newMessage.trim()) return;
+
+    if (socketRef.current && isConnected) {
+      // Send message via WebSocket for real-time delivery
+      socketRef.current.emit('send_message', {
+        user: currentUser,
+        group_id: group.id,
+        message: newMessage.trim()
+      });
+
+      // Clear input immediately for better UX
+      setNewMessage('');
+    } else {
+      // Fallback to HTTP if WebSocket is not available
+      try {
+        const response = await axios.post(`/groups/${group.id}/chat`, {
+          user: currentUser,
+          message: newMessage.trim(),
+          timestamp: new Date().toISOString()
+        });
+
+        setChatMessages(prev => [...prev, response.data.message]);
+        setNewMessage('');
+      } catch (err) {
+        console.error('Error sending message:', err);
+        setError('Failed to send message');
+      }
+    }
+  };
+
+  const handleToggleChat = () => {
+    setShowChat(!showChat);
   };
 
   const handleInputChange = (e) => {
@@ -64,7 +189,7 @@ const GroupTrades = ({ group, onBack, currentUser }) => {
       });
       
       setTrades(prev => [...prev, response.data.trade]);
-      setNewTrade({ symbol: '', quantity: '', price: '', type: 'buy' });
+      setNewTrade({ symbol: '', quantity: '1-10', price: '', type: 'buy' });
       setShowAddForm(false);
       setSuccess('Trade added successfully!');
       setError('');
@@ -137,9 +262,25 @@ const GroupTrades = ({ group, onBack, currentUser }) => {
     return new Date(timestamp).toLocaleString();
   };
 
+  const getQuantityMidpoint = (quantityRange) => {
+    // Convert quantity range to midpoint for calculations
+    switch (quantityRange) {
+      case '1-10':
+        return 5.5;
+      case '10-100':
+        return 55;
+      case '100-1000':
+        return 550;
+      default:
+        // Handle legacy numeric quantities
+        return isNaN(quantityRange) ? 0 : Number(quantityRange);
+    }
+  };
+
   const getTotalValue = () => {
     return trades.reduce((total, trade) => {
-      const value = trade.quantity * trade.price;
+      const quantity = getQuantityMidpoint(trade.quantity);
+      const value = quantity * trade.price;
       return total + (trade.type === 'buy' ? value : -value);
     }, 0);
   };
@@ -186,23 +327,29 @@ const GroupTrades = ({ group, onBack, currentUser }) => {
         </button>
       </div>
 
-      {/* Admin Tabs */}
-      {isAdmin && (
-        <div className="admin-tabs">
-          <button 
-            className={`tab-button ${activeTab === 'trades' ? 'active' : ''}`}
-            onClick={() => setActiveTab('trades')}
-          >
-            Trades ({trades.length})
-          </button>
+      {/* Navigation Tabs */}
+      <div className="admin-tabs">
+        <button 
+          className={`tab-button ${activeTab === 'trades' ? 'active' : ''}`}
+          onClick={() => setActiveTab('trades')}
+        >
+          Trades ({trades.length})
+        </button>
+        <button 
+          className={`tab-button ${activeTab === 'chat' ? 'active' : ''}`}
+          onClick={() => setActiveTab('chat')}
+        >
+          💬 Chat {isConnected ? '🟢' : '🔴'}
+        </button>
+        {isAdmin && (
           <button 
             className={`tab-button ${activeTab === 'requests' ? 'active' : ''}`}
             onClick={() => setActiveTab('requests')}
           >
             Join Requests ({pendingRequests.length})
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Add Trade Form */}
       {showAddForm && (
@@ -224,17 +371,18 @@ const GroupTrades = ({ group, onBack, currentUser }) => {
               </div>
               
               <div className="form-group">
-                <label htmlFor="quantity">Quantity:</label>
-                <input
-                  type="number"
+                <label htmlFor="quantity">Quantity Range:</label>
+                <select
                   id="quantity"
                   name="quantity"
                   value={newTrade.quantity}
                   onChange={handleInputChange}
-                  placeholder="e.g., 100"
-                  min="1"
                   required
-                />
+                >
+                  <option value="1-10">1-10 shares</option>
+                  <option value="10-100">10-100 shares</option>
+                  <option value="100-1000">100-1000 shares</option>
+                </select>
               </div>
               
               <div className="form-group">
@@ -308,7 +456,12 @@ const GroupTrades = ({ group, onBack, currentUser }) => {
                       <div className="trade-detail">
                         <span className="detail-label">Total:</span>
                         <span className="detail-value">
-                          {formatPrice(trade.quantity * trade.price)}
+                          {(() => {
+                            const { minTotal, maxTotal } = calculateTotalRange(trade.quantity, trade.price);
+                            return minTotal === maxTotal 
+                              ? formatPrice(minTotal)
+                              : `${formatPrice(minTotal)} - ${formatPrice(maxTotal)}`;
+                          })()}
                         </span>
                       </div>
                       <div className="trade-detail">
@@ -335,6 +488,57 @@ const GroupTrades = ({ group, onBack, currentUser }) => {
                 ))}
               </div>
             )}
+          </div>
+        ) : activeTab === 'chat' ? (
+          // Chat Tab Content
+          <div className="chat-section">
+            <div className="chat-container">
+              <div className="chat-header-section">
+                <h3>💬 Group Chat</h3>
+                <span className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
+                  {isConnected ? '🟢 Connected' : '🔴 Disconnected'}
+                </span>
+              </div>
+              
+              <div className="chat-messages">
+                {chatMessages.length > 0 ? (
+                  chatMessages.map((msg, index) => (
+                    <div key={index} className={`chat-message ${msg.user === currentUser ? 'own-message' : ''}`}>
+                      <div className="message-header">
+                        <span className="message-user">{msg.user}</span>
+                        <span className="message-time">
+                          {new Date(msg.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <div className="message-content">{msg.message}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="no-messages">No messages yet. Start the conversation!</div>
+                )}
+              </div>
+              
+              <div className="chat-input">
+                <input
+                  type="text"
+                  placeholder="Type a message..."
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      handleSendMessage();
+                    }
+                  }}
+                />
+                <button 
+                  className="btn btn-send"
+                  onClick={handleSendMessage}
+                  disabled={!newMessage.trim() || !isConnected}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           // Join Requests Tab Content (Admin Only)

@@ -11,6 +11,8 @@ services:
     environment:
       - FLASK_ENV=production
       - PORT=5001
+    volumes:
+      - backend_data:/app/data
     networks:
       - tradecircle-network
     restart: unless-stopped
